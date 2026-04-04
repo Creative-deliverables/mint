@@ -23,15 +23,12 @@
 		<!-- Build -->
 		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
-		<PackageIcon>analytics_1671631.png</PackageIcon>
+		<PackageIcon>analytics.ico</PackageIcon>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<None Include="../README.md" Pack="true" PackagePath="/" />
-		<None Include="..\..\..\..\OneDrive\사진\Icon\analytics_1671631.png">
-			<Pack>True</Pack>
-			<PackagePath>\</PackagePath>
-		</None>
+		<None Include="analytics.ico" Pack="true" PackagePath="/" />
 	</ItemGroup>
 
 	<ItemGroup>
