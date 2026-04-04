@@ -5,9 +5,33 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<RootNamespace>ShareInvest.$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+
+		<!-- NuGet Package -->
+		<PackageId>ShareInvest.Agency</PackageId>
+		<Version>0.1.0</Version>
 		<Authors>cyberprophet</Authors>
 		<Company>ShareInvest Corp.</Company>
 		<Copyright>Copyright ⓒ 2026, ShareInvest Corp.</Copyright>
+		<Description>AI agency library for PageMint — multi-provider text and image generation services</Description>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageProjectUrl>https://github.com/cyberprophet/mint</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/cyberprophet/mint</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageTags>ai;agency;openai;image-generation;page-mint</PackageTags>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+
+		<!-- Build -->
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="../README.md" Pack="true" PackagePath="/" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
+		<PackageReference Include="OpenAI" Version="2.10.0" />
+	</ItemGroup>
 
 </Project>
