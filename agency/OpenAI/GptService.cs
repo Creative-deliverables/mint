@@ -46,7 +46,7 @@ public partial class GptService : OpenAIClient
         };
         var result = await chatClient.CompleteChatAsync(messages, options, cancellationToken);
 
-        var raw = result.Value.Content[0].Text ?? string.Empty;
+        var raw = result.Value.Content.FirstOrDefault()?.Text ?? string.Empty;
 
         return CleanTitleResponse(raw);
     }
@@ -60,8 +60,8 @@ public partial class GptService : OpenAIClient
             .Select(l => l.Trim())
             .FirstOrDefault(l => l.Length > 0) ?? string.Empty;
 
-        if (title.Length > 100)
-            title = string.Concat(title.AsSpan(0, 97), "...");
+        if (title.Length > 50)
+            title = string.Concat(title.AsSpan(0, 47), "...");
 
         return title;
     }
