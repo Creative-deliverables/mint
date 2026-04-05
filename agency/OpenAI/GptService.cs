@@ -36,7 +36,7 @@ public partial class GptService : OpenAIClient
 
         var options = new ChatCompletionOptions
         {
-            MaxOutputTokenCount = 100
+            MaxOutputTokenCount = 1024
         };
         var messages = new ChatMessage[]
         {
