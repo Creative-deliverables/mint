@@ -1,4 +1,11 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
+
 using Microsoft.Extensions.Logging.Abstractions;
+
+using NSubstitute;
+
+using OpenAI.Chat;
 
 using ShareInvest.Agency.Models;
 using ShareInvest.Agency.OpenAI;
@@ -13,27 +20,29 @@ namespace ShareInvest.Agency.Tests;
 /// </summary>
 public class ExtractProductInfoTests
 {
+    const string TestSystemPrompt = "test system prompt";
+
     readonly GptService _sut = new(NullLogger<GptService>.Instance, "test-key");
 
     [Fact]
     public async Task ExtractProductInfoAsync_NullDocuments_Throws()
     {
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
-            _sut.ExtractProductInfoAsync(null!));
+            _sut.ExtractProductInfoAsync(TestSystemPrompt, null!));
     }
 
     [Fact]
     public async Task ExtractProductInfoAsync_EmptyDocuments_Throws()
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            _sut.ExtractProductInfoAsync([]));
+            _sut.ExtractProductInfoAsync(TestSystemPrompt, []));
     }
 
     [Fact]
     public async Task ExtractProductInfoAsync_BlankDocumentId_Throws()
     {
         var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
-            _sut.ExtractProductInfoAsync([new("   ", "some text")]));
+            _sut.ExtractProductInfoAsync(TestSystemPrompt, [new("   ", "some text")]));
 
         Assert.Contains("non-empty id", ex.Message);
     }
@@ -42,7 +51,7 @@ public class ExtractProductInfoTests
     public async Task ExtractProductInfoAsync_BlankDocumentText_Throws()
     {
         var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
-            _sut.ExtractProductInfoAsync([new("spec.pdf", "   ")]));
+            _sut.ExtractProductInfoAsync(TestSystemPrompt, [new("spec.pdf", "   ")]));
 
         Assert.Contains("empty text", ex.Message);
     }
@@ -51,7 +60,7 @@ public class ExtractProductInfoTests
     public async Task ExtractProductInfoAsync_DuplicateDocumentIds_Throws()
     {
         var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
-            _sut.ExtractProductInfoAsync(
+            _sut.ExtractProductInfoAsync(TestSystemPrompt,
             [
                 new("spec.pdf", "A"),
                 new("spec.pdf", "B")
@@ -60,23 +69,68 @@ public class ExtractProductInfoTests
         Assert.Contains("Duplicate", ex.Message);
     }
 
-    [Fact]
-    public void DefaultProductInfoSystemPrompt_MentionsEveryRequiredField()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task ExtractProductInfoAsync_Throws_When_SystemPrompt_Is_Null_Or_Empty_Or_Whitespace(
+        string? badPrompt)
     {
-        // Pin the no-hallucination contract plus the full field list. If the prompt drifts
-        // and drops a field, this fails loudly instead of silently producing empty results.
-        var prompt = GptService.DefaultProductInfoSystemPrompt;
+        // ArgumentException.ThrowIfNullOrWhiteSpace throws ArgumentNullException for null
+        // and ArgumentException for empty/whitespace — accept any ArgumentException subclass.
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            _sut.ExtractProductInfoAsync(badPrompt!, [new("spec.pdf", "body")]));
+    }
 
-        Assert.Contains("productName", prompt);
-        Assert.Contains("oneLiner", prompt);
-        Assert.Contains("keyFeatures", prompt);
-        Assert.Contains("detailedSpec", prompt);
-        Assert.Contains("usage", prompt);
-        Assert.Contains("cautions", prompt);
-        Assert.Contains("targetCustomer", prompt);
-        Assert.Contains("sellingPoints", prompt);
-        Assert.Contains("null", prompt);
-        Assert.Contains("sourceDocument", prompt);
+    [Fact]
+    public async Task ExtractProductInfoAsync_Passes_Injected_Prompt()
+    {
+        // Verifies that ExtractProductInfoAsync wires the caller-supplied system prompt
+        // verbatim into the first ChatMessage passed to CompleteChatAsync. A regression
+        // that hard-codes or replaces the prompt would fail here because the captured
+        // system message would no longer match the injected string.
+        const string injected = "My custom extraction prompt";
+        var docs = new[] { new ProductInfoDocument("spec.pdf", "Product body text.") };
+
+        IReadOnlyList<ChatMessage>? captured = null;
+
+        var chatClient = Substitute.For<ChatClient>();
+        chatClient
+            .CompleteChatAsync(
+                Arg.Any<IEnumerable<ChatMessage>>(),
+                Arg.Any<ChatCompletionOptions>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                captured = call.ArgAt<IEnumerable<ChatMessage>>(0).ToList();
+                // Return a minimal Stop completion so ParseProductInfoResult receives empty content
+                // and returns null — that's fine; we only care about the captured messages.
+                var stopJson = """
+                    {
+                      "id": "chatcmpl-capture",
+                      "object": "chat.completion",
+                      "created": 1700000000,
+                      "model": "gpt-5.4-nano",
+                      "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": ""},
+                        "finish_reason": "stop"
+                      }],
+                      "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
+                    }
+                    """;
+                var completion = ModelReaderWriter.Read<ChatCompletion>(BinaryData.FromString(stopJson))!;
+                return Task.FromResult(ClientResult.FromValue(completion, new FakeProductInfoPipelineResponse()));
+            });
+
+        var svc = new ControlledProductInfoGptService(chatClient);
+        await svc.ExtractProductInfoAsync(injected, docs);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.Count >= 1, "Expected at least one ChatMessage.");
+        // Index 0 is the system message; its first content part must carry the injected prompt verbatim.
+        var systemMsg = captured[0];
+        Assert.Equal(injected, systemMsg.Content[0].Text);
     }
 
     [Fact]
@@ -177,5 +231,34 @@ public class ExtractProductInfoTests
 
         Assert.NotNull(result);
         Assert.Equal(["spec.pdf", "brochure.md"], result!.SourceDocuments);
+    }
+
+    // ─── Helpers for prompt-capture test ─────────────────────────────────────
+
+    /// <summary>
+    /// A <see cref="GptService"/> subclass that overrides <see cref="GetChatClient"/>
+    /// to return the injected <see cref="ChatClient"/> substitute, allowing
+    /// <see cref="ExtractProductInfoAsync_Passes_Injected_Prompt"/> to exercise
+    /// the REAL production method without touching the OpenAI network.
+    /// </summary>
+    sealed class ControlledProductInfoGptService(ChatClient chatClient)
+        : GptService(NullLogger<GptService>.Instance, "test-key")
+    {
+        public override ChatClient GetChatClient(string model) => chatClient;
+    }
+
+    /// <summary>Minimal <see cref="PipelineResponse"/> stub required by <see cref="ClientResult.FromValue{T}"/>.</summary>
+    sealed class FakeProductInfoPipelineResponse : PipelineResponse
+    {
+        BinaryData? _content;
+        public override int Status => 200;
+        public override string ReasonPhrase => "OK";
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData Content => _content ??= BinaryData.FromString(string.Empty);
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => Content;
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(Content);
+        protected override PipelineResponseHeaders HeadersCore => throw new NotSupportedException();
+        public override void Dispose() { }
     }
 }
