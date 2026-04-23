@@ -14,38 +14,57 @@ namespace ShareInvest.Agency.OpenAI;
 public partial class GptService
 {
     /// <summary>
-    /// Generates a StudioMint 4-shot bundle from a single product image (Intent 031).
+    /// Generates a StudioMint shot bundle from a single product image (Intent 031 / 038).
     /// Each shot runs as a parallel OpenAI image-edit call against the configured image model
-    /// (expected to be "gpt-image-1" for v1); the four shots use fixed style variants so
-    /// downstream consumers can persist a stable <see cref="StudioMintShot.ShotType"/> label.
+    /// (expected to be "gpt-image-1" for v1); the shots use the supplied <paramref name="shots"/>
+    /// definitions so downstream consumers can persist a stable <see cref="StudioMintShot.ShotType"/> label.
     /// </summary>
     /// <remarks>
     /// Failures on individual shots are captured on the <see cref="StudioMintShot.ErrorReason"/>
     /// field rather than thrown, so a partial result still surfaces to the caller. The aggregate
     /// <see cref="StudioMintResult.IsComplete"/> flag indicates whether every shot succeeded.
+    ///
+    /// When <paramref name="shots"/> is <c>null</c>, the method falls back to the internal
+    /// v1 hardcoded shot list (<see cref="StudioMintShotTypes.All"/>) so existing callers
+    /// that omit the parameter continue to work without modification. This backward-compat
+    /// fallback will be removed in 0.17.0 once all consumers pass their own shot definitions.
+    ///
+    /// Passing an empty list is valid but produces a <see cref="StudioMintResult"/> with zero
+    /// shots and <see cref="StudioMintResult.IsComplete"/> = <c>true</c> (vacuously). This is a
+    /// caller mistake; document it in the consuming code.
     /// </remarks>
     /// <param name="basePrompt">Full StudioMint base prompt assembled by the caller.</param>
     /// <param name="request">The source image plus optional intent guidance.</param>
     /// <param name="cancellationToken">Cancels the entire batch.</param>
     /// <param name="onUsage">Optional usage callback — invoked once per successful shot.</param>
+    /// <param name="shots">
+    /// Shot definitions to generate. When <c>null</c>, falls back to the internal v1 defaults
+    /// (<see cref="StudioMintShotTypes.All"/>). P5 should always pass an explicit list after
+    /// adopting NuGet 0.16.0; the null fallback is a backward-compat bridge only.
+    /// Placed last in the parameter list so existing positional callers —
+    /// <c>GenerateStudioMintAsync(basePrompt, request, ct)</c> — continue to compile.
+    /// </param>
     public virtual async Task<StudioMintResult> GenerateStudioMintAsync(
         string basePrompt,
         StudioMintRequest request,
         CancellationToken cancellationToken = default,
-        Action<ApiUsageEvent>? onUsage = null)
+        Action<ApiUsageEvent>? onUsage = null,
+        IReadOnlyList<StudioMintShotDefinition>? shots = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(basePrompt);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.SourceImage);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SourceImageFileName);
 
-        var tasks = StudioMintShotTypes.All.Select((shot, index) =>
+        var effectiveShots = shots ?? StudioMintShotTypes.All;
+
+        var tasks = effectiveShots.Select((shot, index) =>
             GenerateSingleShotAsync(request, shot, index,
                 BuildShotPrompt(basePrompt, shot, request.IntentText), onUsage, cancellationToken)).ToArray();
 
-        var shots = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks);
 
-        return new StudioMintResult(shots, IsComplete: shots.All(s => s.ImageBytes is not null));
+        return new StudioMintResult(results, IsComplete: results.All(s => s.ImageBytes is not null));
     }
 
     async Task<StudioMintShot> GenerateSingleShotAsync(
@@ -158,10 +177,55 @@ public partial class GptService
 }
 
 /// <summary>
-/// One of the four StudioMint v1 shot slots. Kept as a private record so the specific
-/// prompts remain internal implementation detail — consumers only see the <see cref="Id"/>.
+/// Defines one shot in a StudioMint generation pack. Promoted to <c>public</c> in 0.16.0
+/// so P5 can construct its own shot definitions from external MD files and pass them to
+/// <see cref="GptService.GenerateStudioMintAsync"/> without relying on the internal defaults.
+/// For the rev.3 industry 4-cut pack the fields come from P5 MD files
+/// (<c>shot-cutout.md</c> / <c>shot-styled.md</c> / <c>shot-detail.md</c> / <c>shot-special.md</c>).
 /// </summary>
-internal sealed record StudioMintShotDefinition(string Id, string Label, string Direction);
+public sealed record StudioMintShotDefinition
+{
+    /// <summary>
+    /// Stable identifier persisted with the generated shot (e.g., <c>"cutout"</c>, <c>"styled"</c>).
+    /// </summary>
+    public string Id { get; }
+
+    /// <summary>Human-readable shot name included in the prompt direction header.</summary>
+    public string Label { get; }
+
+    /// <summary>Full shooting-language description injected by <c>BuildShotPrompt</c>.</summary>
+    public string Direction { get; }
+
+    /// <summary>
+    /// Constructs a shot definition and validates that all three fields are non-null,
+    /// non-empty, and non-whitespace. Introduced in 0.16.0 alongside the <c>public</c>
+    /// promotion so external callers (P5 and third-party NuGet consumers) cannot
+    /// accidentally ship malformed shot definitions that would silently corrupt the
+    /// generated prompt.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="Id"/>, <paramref name="Label"/>, or
+    /// <paramref name="Direction"/> is null, empty, or whitespace.
+    /// </exception>
+    public StudioMintShotDefinition(string Id, string Label, string Direction)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(Id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Label);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Direction);
+
+        this.Id = Id;
+        this.Label = Label;
+        this.Direction = Direction;
+    }
+
+    /// <summary>Deconstructs the record into its three components.</summary>
+    public void Deconstruct(out string Id, out string Label, out string Direction)
+    {
+        Id = this.Id;
+        Label = this.Label;
+        Direction = this.Direction;
+    }
+}
 
 internal static class StudioMintShotTypes
 {
