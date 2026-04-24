@@ -22,6 +22,8 @@ public class ModelPricingTableTests
     [InlineData("openai", "gpt-image-1", 1_000_000, 1_000_000, 5.00 + 40.00)]
     [InlineData("openai", "gpt-image-1.5", 1_000_000, 1_000_000, 5.00 + 32.00)]
     [InlineData("openai", "gpt-image-1-mini", 1_000_000, 1_000_000, 2.00 + 8.00)]
+    // gpt-image-2 (mint#99) — OpenAI published rates: text $5 / out $30.
+    [InlineData("openai", "gpt-image-2", 1_000_000, 1_000_000, 5.00 + 30.00)]
     public void EstimateCost_ImageModels_TextOnly_UsesTextInputRate(string provider, string model, int input, int output, double expected)
     {
         var cost = ModelPricingTable.EstimateCost(provider, model, input, output);
@@ -39,6 +41,8 @@ public class ModelPricingTableTests
     [InlineData("openai", "gpt-image-1", 1_000_000, 1_000_000, 1_000_000, 5.00 + 10.00 + 40.00)]
     [InlineData("openai", "gpt-image-1.5", 1_000_000, 1_000_000, 1_000_000, 5.00 + 8.00 + 32.00)]
     [InlineData("openai", "gpt-image-1-mini", 1_000_000, 1_000_000, 1_000_000, 2.00 + 2.50 + 8.00)]
+    // gpt-image-2: text $5 / img $8 / out $30 (mint#99).
+    [InlineData("openai", "gpt-image-2", 1_000_000, 1_000_000, 1_000_000, 5.00 + 8.00 + 30.00)]
     public void EstimateCost_ImageModels_WithSourceImage_UsesBothInputRates(
         string provider, string model, int textInput, int imageInput, int output, double expected)
     {
@@ -172,8 +176,10 @@ public class ModelPricingTableTests
     }
 
     [Fact]
-    public void PricingVersion_IsFour()
+    public void PricingVersion_IsSix()
     {
-        Assert.Equal(4, ModelPricingTable.PricingVersion);
+        // 5 (0.16.7) added gpt-image-2 at estimated rates; 6 (0.16.8) corrected
+        // them to OpenAI's published figures per PR #100 review.
+        Assert.Equal(6, ModelPricingTable.PricingVersion);
     }
 }

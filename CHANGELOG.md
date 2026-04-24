@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.16.8] — 2026-04-24
+
+### Fixed
+- **`gpt-image-2` output rate corrected $32 → $30 per 1M tokens** — PR #100 review. 0.16.7 shipped estimated rates (matched gpt-image-1.5); OpenAI's published `gpt-image-2` pricing is text $5 / img $8 / out $30 / cached-text $1.25 / cached-img $2. 0.16.7 on nuget.org is immutable but should be treated as superseded — P5 consumers should bump to 0.16.8.
+- **`PricingVersion` bumped 5 → 6** so the pricing-change detector picks up the rate correction.
+
+## [0.16.7] — 2026-04-24
+
+### Added
+- **`gpt-image-2` pricing row in `ModelPricingTable`** — mint#99. Without this entry `ModelPricingTable.EstimateCost()` returned null for every StudioMint run (the service uses `gpt-image-2` on the edit endpoint), which landed as `NULL` in `ApiUsageLog.EstimatedCostUsd` and broke per-job cost reporting. Initial rates were estimated at gpt-image-1.5 levels; 0.16.8 corrects them to the published numbers.
+- **`PricingVersion` bumped 4 → 5** so P5's pricing-change detector (and any external consumer cache) picks up the new row.
+
+---
+
 ## [0.16.6] — 2026-04-24
 
 ### Fixed
