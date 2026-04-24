@@ -79,10 +79,30 @@ public partial class GptService
         {
             var imageClient = GetImageClient(imageModel);
 
+            // Tuned for the `gpt-image-2` edit endpoint (default for
+            // StudioMint since 0.16.4, configured via `Agency.Models.Image`
+            // in P5).
+            //
+            // `Quality` is intentionally **NOT** set. OpenAI's public
+            // REST API accepts `quality=high` on this endpoint (verified
+            // 2026-04-24 via curl against gpt-image-2), but the OpenAI
+            // .NET SDK 2.10.0 serializes `ImageEditOptions.Quality` in a
+            // shape the edit endpoint rejects as
+            // `HTTP 400 (invalid_request_error: unknown_parameter: quality)`.
+            // The failure was reproduced in an isolated probe against
+            // 2.10.0; `Size`/`OutputFileFormat`/`EndUserId` alone work
+            // unchanged. Until the SDK fixes the quality serialization,
+            // we let the server default (`auto`) pick the quality tier
+            // — acceptable for v1 4-cut output. Revisit when the SDK is
+            // upgraded past 2.10.0.
+            //
+            // Kept defaults for 4-cut commerce product shots:
+            //   Size             = 1024x1024 (square, PageMint asset ratio)
+            //   OutputFileFormat = Png       (lossless, no compression)
+            //   EndUserId        = userId    (abuse / support traceability)
             var options = new ImageEditOptions
             {
                 Size = GeneratedImageSize.W1024xH1024,
-                Quality = GeneratedImageQuality.High,
                 OutputFileFormat = GeneratedImageFileFormat.Png,
                 EndUserId = request.UserId
             };
@@ -131,9 +151,13 @@ public partial class GptService
         }
         catch (ClientResultException ex) when (ex.Status == 400)
         {
-            logger.LogWarning(ex, "StudioMint shot {ShotType} blocked by moderation: {Message}", shot.Id, ex.Message);
+            var reason = ClassifyBadRequest(ex.Message);
+            logger.LogWarning(
+                ex,
+                "StudioMint shot {ShotType} failed with HTTP 400 ({Reason}): {Message}",
+                shot.Id, reason, ex.Message);
 
-            return new StudioMintShot(index, shot.Id, ImageBytes: null, ErrorReason: "moderation");
+            return new StudioMintShot(index, shot.Id, ImageBytes: null, ErrorReason: reason);
         }
         catch (ClientResultException ex) when (ex.Status == 401)
         {
@@ -159,6 +183,31 @@ public partial class GptService
 
             return new StudioMintShot(index, shot.Id, ImageBytes: null, ErrorReason: "unexpected");
         }
+    }
+
+    /// <summary>
+    /// Classifies an OpenAI HTTP 400 response into a stable <see cref="StudioMintShot.ErrorReason"/>
+    /// token. The OpenAI edit endpoint returns 400 for two very different reasons:
+    /// content-policy rejections (moderation) and request-shape problems (unknown parameter,
+    /// invalid image, etc.). Collapsing both into <c>"moderation"</c> as the old code did
+    /// masked real bugs (e.g., the <c>output_format</c> regression in 0.16.2) behind a
+    /// user-safe-looking label.
+    /// </summary>
+    /// <remarks>
+    /// We look at the plain-text body of the exception since <c>ClientResultException</c>
+    /// doesn't expose OpenAI's <c>error.code</c> field as a structured property. OpenAI's
+    /// moderation rejections carry identifiable markers — <c>moderation_blocked</c> or
+    /// <c>content_policy_violation</c>. Anything else in 400 territory is treated as
+    /// <c>bad_request</c> so the failure surfaces honestly in logs and the DB.
+    /// </remarks>
+    internal static string ClassifyBadRequest(string? message)
+    {
+        if (string.IsNullOrEmpty(message))
+            return "bad_request";
+        if (message.Contains("moderation_blocked", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("content_policy_violation", StringComparison.OrdinalIgnoreCase))
+            return "moderation";
+        return "bad_request";
     }
 
     /// <summary>

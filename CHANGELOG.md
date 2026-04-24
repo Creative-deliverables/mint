@@ -10,6 +10,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.16.6] — 2026-04-24
+
+### Fixed
+- **Drop `ImageEditOptions.Quality` in `GenerateSingleShotAsync`** — OpenAI .NET SDK 2.10.0 serializes this property in a shape the `POST /v1/images/edits` endpoint rejects as `HTTP 400 (invalid_request_error: unknown_parameter: quality)`, despite OpenAI's REST API accepting `quality=high` on the same endpoint for the same model when the request is built by hand. Reproduced in an isolated .NET 10 probe on 2026-04-24 against `gpt-image-2`. Empirically, removing `Quality` while keeping `Size` + `OutputFileFormat` + `EndUserId` makes the call succeed; all other single-field probes (`Size` only, `OutputFileFormat` only, `Size+OutputFileFormat+EndUserId`) also succeed. Only the presence of `Quality` in the options bag triggers the reject.
+
+### Known upstream issue
+- Root cause lives in `OpenAI.Images.ImageEditOptions` in the OpenAI .NET SDK 2.10.0. The public generations endpoint (which StudioMint does not use) appears to accept the same property correctly, so the regression is specific to the edit path's serialization. Tracking for SDK upgrade when a fix lands. Until then, we rely on the server's default `quality=auto`, which is acceptable for the v1 4-cut output.
+
+### Notes
+- Purely behavioural — no API surface changes. P5 consumers do not need to touch their wiring beyond bumping the NuGet reference.
+
+---
+
+## [0.16.5] — 2026-04-24
+
+### Fixed
+- **Restore the 4-param `GptService` constructor as a binary-compatible overload** (Codex review feedback on 0.16.4). 0.16.4 replaced `GptService(ILogger<GptService>, string, string, string?)` with a 5-param variant that had an optional `imageGenerationModel = null` at the end. C# treats that as the same *source* signature but emits a different *IL* signature — assemblies compiled against ≤0.16.2 would therefore hit `MissingMethodException` at runtime when loaded with 0.16.4. The 5-param overload is retained (with the default value removed so the two don't overlap ambiguously); the old 4-param overload now delegates to it with `imageGenerationModel: null`, preserving the ≤0.16.2 behaviour byte-for-byte.
+
+### Notes
+- **NuGet consumers: bump `Models.csproj`** in P5 (creative-server) to `Version="0.16.5"`. 0.16.4 remains on nuget.org for history; use 0.16.5 or later to avoid the binary-compat trap for any downstream consumer that did not recompile.
+
+---
+
+## [0.16.4] — 2026-04-24
+
+### Changed
+- **Split the image model into two knobs** on `GptService`: `imageModel` (edit endpoint, StudioMint) and `imageGenerationModel` (generations endpoint, PageMint). Adds a new optional constructor parameter `imageGenerationModel` on both the API-key and `OpenAIClientOptions` overloads. Falls back to `imageModel` when null so old callers keep working without changes. Enables consumers (P5) to route StudioMint to `gpt-image-2` while keeping PageMint's high-volume generations on the cheaper `gpt-image-1-mini`.
+- **Restore full `ImageEditOptions` set for StudioMint**: `Size = 1024x1024`, `Quality = High`, `OutputFileFormat = Png`, `EndUserId = userId`. 0.16.3 stripped these because `gpt-image-1` / `gpt-image-1-mini` rejected them on the public edit endpoint as `unknown_parameter`. Now that the expected edit model is `gpt-image-2`, which accepts the full set per the Azure Foundry spec for gpt-image-series, they're safe again.
+- **Drop `SupportsFullEditOptions` gating** introduced mid-0.16.4 review. With the edit model pinned to `gpt-image-2`+ via the split, the model-aware fallback is no longer needed. Simpler and one fewer concept to carry.
+
+### Known issue
+- **Binary-compat regression** on the `GptService(ILogger, string, string, string?)` constructor: the signature was widened to 5 params with an optional `imageGenerationModel = null`, which changes the IL surface. Source-compatible, but assemblies compiled against ≤0.16.2 can hit `MissingMethodException` at runtime. **Fixed in 0.16.5.**
+
+### Notes
+- Superseded by 0.16.5 for the binary-compat issue above. Functionally correct otherwise.
+
+---
+
+## [0.16.3] — 2026-04-24
+
+### Fixed
+- **Drop unsupported `output_format` from `ImageEditOptions` in `GenerateSingleShotAsync`.** The OpenAI `gpt-image-1` public edit endpoint (`POST /v1/images/edits`) rejects `output_format` as `unknown_parameter`, unlike the generations endpoint that accepts it. The SDK's `ImageEditOptions` exposes the property on both paths, so the compiler can't catch the cross-endpoint leak. Empirically confirmed on 2026-04-24 via the first real-DB StudioMint run from `jim@mint.surf` — all 4 shots failed `HTTP 400 (invalid_request_error: unknown_parameter) Parameter: output_format`. Removing the assignment lets the edit endpoint use its PNG default, matching what the call site wanted anyway.
+
+### Added
+- **`ClassifyBadRequest(string?)` helper + `ErrorReason = "bad_request"`** for HTTP 400 responses that are *not* content-policy rejections. The previous catch block labeled every 400 as `"moderation"`, which masked this regression behind a user-safe-looking label. New logic matches `moderation_blocked` / `content_policy_violation` substrings (case-insensitive) and returns `"moderation"` only for genuine policy blocks; everything else (parameter shape, invalid image, etc.) now surfaces as `"bad_request"` in logs and the `StudioMintShot.ErrorReason` field.
+- **6 unit tests covering the classifier**: null / empty / moderation_blocked / content_policy_violation / unknown_parameter (regression) / case-insensitive matching.
+
+### Superseded
+- **0.16.3 is retained on nuget.org for history but superseded by 0.16.4.** The edit options were stripped in 0.16.3 to work around gpt-image-1's rejection; 0.16.4 restores the full set after the image model is pinned to gpt-image-2.
+
+---
+
 ## [0.16.2] — 2026-04-23
 
 ### Fixed
